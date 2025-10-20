@@ -1,5 +1,5 @@
 fastapi==0.109.1
 uvicorn[standard]==0.23.2
 pandas==2.3.3
-numpy==1.26.5
+numpy==1.23.5
 scikit-surprise==1.1.4

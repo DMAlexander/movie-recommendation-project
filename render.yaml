@@ -17,6 +17,6 @@ services:
 
       # Install the rest of your requirements
       pip install -r requirements.txt --use-pep517
-    startCommand: uvicorn example_recommender.api:app --host 0.0.0.0 --port $PORT
+    startCommand: python3 -m uvicorn example_recommender.api:app --host 0.0.0.0 --port $PORT
 
 

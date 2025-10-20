@@ -1,5 +1,5 @@
 # Core dependencies first
-numpy==1.27.0
+numpy==1.26.4
 pandas==2.0.3
 
 # Then other packages

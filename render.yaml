@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: movie-recommender
+    env: python
+    buildCommand: pip install -r example_recommender/requirements.txt
+    startCommand: uvicorn example_recommender.api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10

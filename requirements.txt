@@ -1,4 +1,6 @@
 # Core dependencies first
+fastapi>=0.107
+uvicorn[standard]>=0.23
 numpy==1.26.4
 pandas==2.0.3
 

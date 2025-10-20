@@ -1,44 +1,38 @@
-# api.py
 from fastapi import FastAPI
 import pickle
 import pandas as pd
-from surprise import Dataset, SVD, Reader
-
-import os
-
-# Paths
-here = os.path.dirname(__file__)
-model_path = os.path.join(here, "model.pkl")
-movies_path = os.path.join(here, "u.item")  # MovieLens titles
-
-# Load model
-with open(model_path, "rb") as f:
-    model = pickle.load(f)
-
-# Load movie metadata
-movies = pd.read_csv(
-    "http://files.grouplens.org/datasets/movielens/ml-100k/u.item",
-    sep="|", encoding="latin-1",
-    usecols=[0, 1], names=["movie_id", "title"]
-)
 
 app = FastAPI()
 
+# Load trained model
+with open("model.pkl", "rb") as f:
+    model = pickle.load(f)
+
+# Load movie data
+movies = pd.read_csv("movies.csv")
+ratings = pd.read_csv("ratings.csv")
+
+@app.get("/")
+def read_root():
+    return {"message": "Movie Recommendation API is running!"}
+
 @app.get("/recommend/{user_id}")
-def recommend(user_id: int, n: int = 5):
-    """
-    Get top-N personalized movie recommendations for a user.
-    """
-    all_movie_ids = movies["movie_id"].tolist()
-    
-    # Predict rating for each movie for this user
-    predictions = [(mid, model.predict(user_id, mid).est) for mid in all_movie_ids]
-    
-    # Sort by predicted rating descending
-    top_movies = sorted(predictions, key=lambda x: x[1], reverse=True)[:n]
-    
-    recs = [movies[movies["movie_id"] == mid]["title"].values[0] for mid, _ in top_movies]
-    return {"user_id": user_id, "recommendations": recs}
+def recommend(user_id: int, top_n: int = 5):
+    # Generate top-N recommendations for the given user
+    user_ratings = ratings[ratings.userId == user_id]
+    movie_ids_watched = user_ratings.movieId.tolist()
+
+    all_movie_ids = movies.movieId.tolist()
+    movie_ids_to_predict = [mid for mid in all_movie_ids if mid not in movie_ids_watched]
+
+    predictions = [(mid, model.predict(user_id, mid).est) for mid in movie_ids_to_predict]
+    top_predictions = sorted(predictions, key=lambda x: x[1], reverse=True)[:top_n]
+
+    recommended_movies = movies[movies.movieId.isin([mid for mid, _ in top_predictions])]
+    recommended_movies["predicted_rating"] = [rating for _, rating in top_predictions]
+
+    return recommended_movies.to_dict(orient="records")
+
 
 @app.post("/rate/")
 def rate_movies(ratings: dict):

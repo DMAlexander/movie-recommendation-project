@@ -1,18 +1,20 @@
 # train_model.py
-from surprise import SVD, Dataset
-from surprise.model_selection import train_test_split
+import pandas as pd
+from surprise import SVD, Dataset, Reader
 import pickle
 
-# Load built-in MovieLens dataset (100k ratings)
-data = Dataset.load_builtin('ml-100k')
-trainset, testset = train_test_split(data, test_size=0.2)
+# Load MovieLens data
+ratings = pd.read_csv("ratings.csv")
 
-# Train model
+# Prepare data for surprise
+reader = Reader(rating_scale=(ratings.rating.min(), ratings.rating.max()))
+data = Dataset.load_from_df(ratings[['userId', 'movieId', 'rating']], reader)
+
+# Train SVD model
+trainset = data.build_full_trainset()
 model = SVD()
 model.fit(trainset)
 
-# Save model for later use
+# Save trained model
 with open("model.pkl", "wb") as f:
     pickle.dump(model, f)
-
-print("✅ Model trained and saved as model.pkl")

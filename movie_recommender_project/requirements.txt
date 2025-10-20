@@ -1,6 +1,6 @@
 fastapi
 uvicorn
 pandas
-scikit-surprise
-matplotlib
-seaborn
+numpy<2.0
+scikit-surprise==1.1.3 --only-binary :all:
+joblib

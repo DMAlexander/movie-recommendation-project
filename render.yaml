@@ -1,12 +1,22 @@
 services:
   - type: web
-    name: movie-recommender
+    name: my-python-app         # Replace with your service name
     env: python
+    plan: free                  # or your chosen plan
+    runtime: python-3.10.5      # <-- Specify the exact Python version
     buildCommand: |
+      #!/bin/bash
+      # Ensure pip exists in the virtual environment
       python3 -m ensurepip --upgrade
+
+      # Upgrade pip, setuptools, and wheel
       python3 -m pip install --upgrade pip setuptools wheel
+
+      # Install numpy first (required for scikit-surprise)
+      pip install numpy==1.27.0
+
+      # Install the rest of your requirements
       pip install -r requirements.txt --use-pep517
     startCommand: uvicorn example_recommender.api:app --host 0.0.0.0 --port $PORT
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.10
+
+

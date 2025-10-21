@@ -7,6 +7,7 @@ numpy==1.26.4
 pandas==2.0.3
 scipy==1.15.3
 joblib==1.5.2
+scikit-learn==1.3.2
 
 # Recommender system
 scikit-surprise==1.1.3

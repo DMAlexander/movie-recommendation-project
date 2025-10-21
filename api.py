@@ -13,7 +13,7 @@ app = FastAPI(title="Movie Recommender API")
 # ---------------------------
 # File paths
 # ---------------------------
-MOVIES_PATH = "/movies.csv"
+MOVIES_PATH = "data/movies.csv"
 RATINGS_PATH = "data/ratings.csv"
 MODEL_PATH = "model/trained_model.pkl"
 

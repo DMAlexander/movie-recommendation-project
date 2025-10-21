@@ -27,13 +27,25 @@ movies = pd.read_csv(MOVIES_PATH)
 ratings = pd.read_csv(RATINGS_PATH)
 
 # ---------------------------
+# Ensure IDs are integers
+# ---------------------------
+movies['movieId'] = movies['movieId'].astype(int)
+ratings['movieId'] = ratings['movieId'].astype(int)
+ratings['userId'] = ratings['userId'].astype(int)
+
+
+# ---------------------------
 # Convert one-hot genre columns to 'genres' column
 # ---------------------------
-genre_columns = movies.columns[6:]  # MovieLens 100k: genres start from column 7
-movies['genres'] = movies[genre_columns].apply(
-    lambda row: '|'.join([genre for genre in genre_columns if row[genre] == 1]),
-    axis=1
-)
+genre_columns = [col for col in movies.columns[6:] if movies[col].isin([0,1]).all()]
+
+if genre_columns:
+    movies['genres'] = movies[genre_columns].apply(
+        lambda row: '|'.join([genre for genre in genre_columns if row[genre] == 1]),
+        axis=1
+    )
+else:
+    movies['genres'] = ""
 
 # ---------------------------
 # Load or train model

@@ -8,9 +8,9 @@ import os
 app = FastAPI()
 
 # File paths
-MOVIES_PATH = "data/movies.csv"
-RATINGS_PATH = "data/ratings.csv"
-MODEL_PATH = "model/trained_model.pkl"
+MOVIES_PATH = "movies.csv"
+RATINGS_PATH = "ratings.csv"
+MODEL_PATH = "model.pkl"
 
 # Step 1: Load data
 if not os.path.exists(MOVIES_PATH) or not os.path.exists(RATINGS_PATH):

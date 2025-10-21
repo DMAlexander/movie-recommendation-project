@@ -123,16 +123,20 @@ def recommend_movies(user_id: int, n: int = 5):
 # Movie info
 @app.get("/movies/{movie_id}")
 def get_movie(movie_id: int):
-    movie = movies[movies["movieId"] == movie_id]
+    movie = movies.loc[movies["movieId"] == movie_id]
     if movie.empty:
         raise HTTPException(status_code=404, detail="Movie not found")
     movie = movie.iloc[0]
-    avg_rating = ratings[ratings["movieId"] == movie_id]["rating"].mean()
+
+    movie_ratings = ratings.loc[ratings["movieId"] == movie_id, "rating"]
+    avg_rating = movie_ratings.mean() if not movie_ratings.empty else None
+
     return {
-        "movieId": movie.movieId,
+        "movieId": int(movie.movieId),
         "title": movie.title,
-        "genres": movie.genres,
-        "average_rating": round(avg_rating, 2) if not pd.isna(avg_rating) else None
+        # Use .get() with fallback to empty string
+        "genres": getattr(movie, 'genres', ""),
+        "average_rating": round(avg_rating, 2) if avg_rating is not None else None
     }
 
 # User info

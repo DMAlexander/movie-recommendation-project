@@ -5,17 +5,17 @@ from surprise.model_selection import train_test_split
 import pandas as pd
 import joblib
 import os
-from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 app = FastAPI(title="Movie Recommender API")
 
 # ---------------------------
 # File paths
 # ---------------------------
-MOVIES_PATH = "movies.csv"
-RATINGS_PATH = "ratings.csv"
-MODEL_PATH = "trained_model.pkl"
+MOVIES_PATH = "/movies.csv"
+RATINGS_PATH = "data/ratings.csv"
+MODEL_PATH = "model/trained_model.pkl"
 
 # ---------------------------
 # Load data
@@ -25,6 +25,15 @@ if not os.path.exists(MOVIES_PATH) or not os.path.exists(RATINGS_PATH):
 
 movies = pd.read_csv(MOVIES_PATH)
 ratings = pd.read_csv(RATINGS_PATH)
+
+# ---------------------------
+# Convert one-hot genre columns to 'genres' column
+# ---------------------------
+genre_columns = movies.columns[6:]  # MovieLens 100k: genres start from column 7
+movies['genres'] = movies[genre_columns].apply(
+    lambda row: '|'.join([genre for genre in genre_columns if row[genre] == 1]),
+    axis=1
+)
 
 # ---------------------------
 # Load or train model
@@ -41,7 +50,7 @@ else:
     joblib.dump(model, MODEL_PATH)
 
 # ---------------------------
-# Precompute TF-IDF for similar movies
+# Precompute TF-IDF and cosine similarity
 # ---------------------------
 tfidf = TfidfVectorizer(stop_words='english')
 tfidf_matrix = tfidf.fit_transform(movies['genres'])
@@ -141,7 +150,7 @@ def top_rated(n: int = 10):
 
 # Similar movies
 @app.get("/similar/{movie_id}")
-def similar_movies(movie_id: int, n: int = 5):
+def similar_movies_endpoint(movie_id: int, n: int = 5):
     return get_similar_movies(movie_id, n)
 
 # Model info

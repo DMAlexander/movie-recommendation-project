@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from surprise import Dataset, Reader, SVD
+from surprise import Dataset, Reader, SVD, accuracy
 from surprise.model_selection import train_test_split
 import pandas as pd
 import joblib
@@ -176,22 +176,69 @@ def similar_movies_endpoint(movie_id: int, n: int = 5):
 # Model info
 @app.get("/model-info")
 def model_info():
-    reader = Reader(rating_scale=(1, 5))
+    """
+    Returns information about the trained SVD model including:
+    - Model type
+    - Number of ratings
+    - RMSE and MAE on a hold-out test set
+    """
+    if ratings.empty:
+        raise HTTPException(status_code=404, detail="No rating data available")
+
+    # Prepare data for Surprise
+    reader = Reader(rating_scale=(ratings.rating.min(), ratings.rating.max()))
     data = Dataset.load_from_df(ratings[['userId', 'movieId', 'rating']], reader)
-    trainset, testset = train_test_split(data, test_size=0.2)
-    from surprise import accuracy
-    preds = model.test(testset)
-    rmse = accuracy.rmse(preds, verbose=False)
-    return {"model_type": type(model).__name__, "num_ratings": len(ratings), "rmse_on_test": round(rmse, 4)}
+
+    # Split into train/test (20% test)
+    trainset, testset = train_test_split(data, test_size=0.2, random_state=42)
+
+    # Evaluate performance
+    predictions = model.test(testset)
+    rmse = accuracy.rmse(predictions, verbose=False)
+    mae = accuracy.mae(predictions, verbose=False)
+
+    return {
+        "model_type": type(model).__name__,
+        "num_ratings": len(ratings),
+        "rmse_on_test": round(rmse, 4),
+        "mae_on_test": round(mae, 4)
+    }
 
 # Retrain model
 @app.post("/retrain")
 def retrain_model():
+    """
+    Retrains the SVD model on all current ratings.
+    Returns performance metrics (RMSE and MAE) on a hold-out test set.
+    """
     global model
-    reader = Reader(rating_scale=(1, 5))
+
+    if ratings.empty:
+        raise HTTPException(status_code=404, detail="No rating data available")
+
+    # Prepare data for Surprise
+    reader = Reader(rating_scale=(ratings.rating.min(), ratings.rating.max()))
     data = Dataset.load_from_df(ratings[['userId', 'movieId', 'rating']], reader)
-    trainset, _ = train_test_split(data, test_size=0.2)
+
+    # Split into train/test sets for evaluation
+    trainset, testset = train_test_split(data, test_size=0.2, random_state=42)
+
+    # Train SVD model on training set
     model = SVD()
     model.fit(trainset)
-    joblib.dump(model, MODEL_PATH)
-    return {"message": "Model retrained successfully", "num_ratings": len(ratings)}
+
+    # Evaluate on test set
+    predictions = model.test(testset)
+    rmse = accuracy.rmse(predictions, verbose=False)
+    mae = accuracy.mae(predictions, verbose=False)
+
+    # Save the model
+    os.makedirs("model", exist_ok=True)
+    joblib.dump(model, "model/trained_model.pkl")
+
+    return {
+        "message": "Model retrained successfully",
+        "num_ratings": len(ratings),
+        "rmse_on_test": round(rmse, 4),
+        "mae_on_test": round(mae, 4)
+    }

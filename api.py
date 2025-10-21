@@ -8,7 +8,7 @@ import os
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-app = FastAPI(title="Movie Recommender API")
+app = FastAPI(title="Robust Movie Recommender API")
 
 # ---------------------------
 # File paths
@@ -18,7 +18,7 @@ RATINGS_PATH = "data/ratings.csv"
 MODEL_PATH = "model/trained_model.pkl"
 
 # ---------------------------
-# Load data
+# Load CSVs
 # ---------------------------
 if not os.path.exists(MOVIES_PATH) or not os.path.exists(RATINGS_PATH):
     raise FileNotFoundError("movies.csv or ratings.csv not found in data/ folder")
@@ -29,16 +29,16 @@ ratings = pd.read_csv(RATINGS_PATH)
 # ---------------------------
 # Ensure IDs are integers
 # ---------------------------
-movies['movieId'] = movies['movieId'].astype(int)
-ratings['movieId'] = ratings['movieId'].astype(int)
-ratings['userId'] = ratings['userId'].astype(int)
-
+for col in ['movieId', 'userId']:
+    if col in movies.columns:
+        movies[col] = pd.to_numeric(movies[col], errors='coerce').fillna(0).astype(int)
+    if col in ratings.columns:
+        ratings[col] = pd.to_numeric(ratings[col], errors='coerce').fillna(0).astype(int)
 
 # ---------------------------
-# Convert one-hot genre columns to 'genres' column
+# Convert one-hot genre columns to 'genres' column safely
 # ---------------------------
 genre_columns = [col for col in movies.columns[6:] if movies[col].isin([0,1]).all()]
-
 if genre_columns:
     movies['genres'] = movies[genre_columns].apply(
         lambda row: '|'.join([genre for genre in genre_columns if row[genre] == 1]),
@@ -48,7 +48,7 @@ else:
     movies['genres'] = ""
 
 # ---------------------------
-# Load or train model
+# Load or train model safely
 # ---------------------------
 if os.path.exists(MODEL_PATH):
     model = joblib.load(MODEL_PATH)
@@ -62,11 +62,14 @@ else:
     joblib.dump(model, MODEL_PATH)
 
 # ---------------------------
-# Precompute TF-IDF and cosine similarity
+# Compute TF-IDF and cosine similarity if genres exist
 # ---------------------------
-tfidf = TfidfVectorizer(stop_words='english')
-tfidf_matrix = tfidf.fit_transform(movies['genres'])
-cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+if movies['genres'].str.strip().any():
+    tfidf = TfidfVectorizer(stop_words='english')
+    tfidf_matrix = tfidf.fit_transform(movies['genres'])
+    cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+else:
+    cosine_sim = None
 
 # ---------------------------
 # Helper functions
@@ -87,11 +90,13 @@ def get_top_n_recommendations(user_id: int, n: int = 5):
     top_movies = movies[movies["movieId"].isin([m for m, _ in top_n])]
 
     return [
-        {"movieId": row.movieId, "title": row.title, "predicted_rating": float(dict(top_n)[row.movieId])}
+        {"movieId": int(row.movieId), "title": row.title, "predicted_rating": float(dict(top_n)[row.movieId])}
         for _, row in top_movies.iterrows()
     ]
 
 def get_similar_movies(movie_id: int, n: int = 5):
+    if cosine_sim is None:
+        raise HTTPException(status_code=404, detail="Genre similarity data not available")
     if movie_id not in movies["movieId"].values:
         raise HTTPException(status_code=404, detail="Movie not found")
     idx = movies.index[movies["movieId"] == movie_id][0]
@@ -113,7 +118,7 @@ class RatingInput(BaseModel):
 # ---------------------------
 @app.get("/")
 def root():
-    return {"message": "Movie Recommender API is running!"}
+    return {"message": "Robust Movie Recommender API is running!"}
 
 # Top-N recommendations
 @app.get("/recommend/{user_id}")
@@ -134,7 +139,6 @@ def get_movie(movie_id: int):
     return {
         "movieId": int(movie.movieId),
         "title": movie.title,
-        # Use .get() with fallback to empty string
         "genres": getattr(movie, 'genres', ""),
         "average_rating": round(avg_rating, 2) if avg_rating is not None else None
     }

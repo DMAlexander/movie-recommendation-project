@@ -1,73 +1,65 @@
-from fastapi import FastAPI
-import pickle
+from fastapi import FastAPI, HTTPException
+from surprise import Dataset, Reader, SVD
+from surprise.model_selection import train_test_split
 import pandas as pd
+import joblib
+import os
 
 app = FastAPI()
 
-# Load trained model
-with open("model.pkl", "rb") as f:
-    model = pickle.load(f)
+# File paths
+MOVIES_PATH = "data/movies.csv"
+RATINGS_PATH = "data/ratings.csv"
+MODEL_PATH = "model/trained_model.pkl"
 
-# Load movie data
-movies = pd.read_csv("movies.csv")
-ratings = pd.read_csv("ratings.csv")
+# Step 1: Load data
+if not os.path.exists(MOVIES_PATH) or not os.path.exists(RATINGS_PATH):
+    raise FileNotFoundError("movies.csv or ratings.csv not found in data/ folder")
 
+movies = pd.read_csv(MOVIES_PATH)
+ratings = pd.read_csv(RATINGS_PATH)
+
+# Step 2: Load or train model
+if os.path.exists(MODEL_PATH):
+    model = joblib.load(MODEL_PATH)
+else:
+    reader = Reader(rating_scale=(1, 5))
+    data = Dataset.load_from_df(ratings[['userId', 'movieId', 'rating']], reader)
+    trainset, _ = train_test_split(data, test_size=0.2)
+    model = SVD()
+    model.fit(trainset)
+    os.makedirs("model", exist_ok=True)
+    joblib.dump(model, MODEL_PATH)
+
+# Step 3: Helper to get movie recommendations
+def get_top_n_recommendations(user_id: int, n: int = 5):
+    if user_id not in ratings["userId"].unique():
+        raise HTTPException(status_code=404, detail="User ID not found")
+
+    # Movies the user hasn’t rated
+    rated_movies = ratings.loc[ratings["userId"] == user_id, "movieId"].tolist()
+    unrated_movies = movies[~movies["movieId"].isin(rated_movies)]
+
+    # Predict ratings for unrated movies
+    predictions = [
+        (movie_id, model.predict(user_id, movie_id).est)
+        for movie_id in unrated_movies["movieId"]
+    ]
+
+    # Get top N
+    top_n = sorted(predictions, key=lambda x: x[1], reverse=True)[:n]
+    top_movies = movies[movies["movieId"].isin([m for m, _ in top_n])]
+
+    return [
+        {"movieId": row.movieId, "title": row.title, "predicted_rating": float(dict(top_n)[row.movieId])}
+        for _, row in top_movies.iterrows()
+    ]
+
+# Step 4: Routes
 @app.get("/")
-def read_root():
-    return {"message": "Movie Recommendation API is running!"}
+def root():
+    return {"message": "Movie recommender API is running!"}
 
 @app.get("/recommend/{user_id}")
-def recommend(user_id: int, top_n: int = 5):
-    # Generate top-N recommendations for the given user
-    user_ratings = ratings[ratings.userId == user_id]
-    movie_ids_watched = user_ratings.movieId.tolist()
-
-    all_movie_ids = movies.movieId.tolist()
-    movie_ids_to_predict = [mid for mid in all_movie_ids if mid not in movie_ids_watched]
-
-    predictions = [(mid, model.predict(user_id, mid).est) for mid in movie_ids_to_predict]
-    top_predictions = sorted(predictions, key=lambda x: x[1], reverse=True)[:top_n]
-
-    recommended_movies = movies[movies.movieId.isin([mid for mid, _ in top_predictions])]
-    recommended_movies["predicted_rating"] = [rating for _, rating in top_predictions]
-
-    return recommended_movies.to_dict(orient="records")
-
-
-@app.post("/rate/")
-def rate_movies(ratings: dict):
-    """
-    Accepts a new user's ratings and returns personalized recommendations.
-    Example input:
-    {
-        "user_id": 1000,
-        "ratings": {
-            "1": 5,   # movie_id: rating
-            "50": 3,
-            "100": 4
-        },
-        "top_n": 5
-    }
-    """
-    user_id = ratings["user_id"]
-    user_ratings = ratings["ratings"]
-    top_n = ratings.get("top_n", 5)
-
-    # Create a temporary dataset for this user
-    temp_data = [(str(user_id), str(mid), float(r)) for mid, r in user_ratings.items()]
-    reader = Reader(rating_scale=(1, 5))
-    temp_dataset = Dataset.load_from_df(pd.DataFrame(temp_data, columns=["userID","itemID","rating"]), reader)
-    trainset = temp_dataset.build_full_trainset()
-    
-    # Update model using partial_fit (or just use original model for prediction)
-    # For simplicity, we will predict for this user based on SVD model
-    all_movie_ids = movies["movie_id"].tolist()
-    predictions = []
-    for mid in all_movie_ids:
-        if mid in user_ratings:
-            continue  # skip movies already rated
-        predictions.append((mid, model.predict(user_id, mid).est))
-    
-    top_movies = sorted(predictions, key=lambda x: x[1], reverse=True)[:top_n]
-    recs = [movies[movies["movie_id"] == mid]["title"].values[0] for mid, _ in top_movies]
-    return {"user_id": user_id, "recommendations": recs}
+def recommend_movies(user_id: int, n: int = 5):
+    return get_top_n_recommendations(user_id, n)

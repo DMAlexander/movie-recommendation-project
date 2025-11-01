@@ -3,7 +3,7 @@ import streamlit as st
 import requests
 
 # 🔹 Replace this with your Render backend URL
-BACKEND_URL = "https://movie-recommendation-project-66jn.onrender.com"
+BACKEND_URL = "https://movie-recommendation-project-1-8xns.onrender.com"
 
 st.set_page_config(page_title="🎬 Personalized Movie Recommender", layout="centered")
 st.title("🎬 Personalized Movie Recommender")

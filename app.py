@@ -80,3 +80,39 @@ else:  # New user
             st.error("Invalid input format. Use movie_id:rating, separated by commas.")
         except requests.exceptions.RequestException as e:
             st.error(f"Error fetching recommendations: {e}")
+
+
+st.header("Search Movie by ID")
+
+movie_id = st.number_input("Enter a Movie ID to look up", min_value=1, step=1)
+
+if st.button("Get Movie Details"):
+    try:
+        response = requests.get(f"{BACKEND_URL}/movies/{movie_id}", timeout=10)
+        response.raise_for_status()
+
+        data = response.json()
+
+        # Display movie details in a clean format
+        st.subheader("Movie Details")
+        if isinstance(data, dict):
+            title = data.get("title", "Unknown Title")
+            genre = data.get("genre", "N/A")
+            year = data.get("year", "N/A")
+
+            st.write(f"**Title:** {title}")
+            st.write(f"**Genre:** {genre}")
+            st.write(f"**Year:** {year}")
+
+            if "description" in data:
+                st.write(f"**Description:** {data['description']}")
+        else:
+            st.warning("Unexpected response format. Check the API response structure.")
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            st.error("Movie not found. Please check the Movie ID.")
+        else:
+            st.error(f"Server error: {e}")
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error fetching movie details: {e}")
+

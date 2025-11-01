@@ -90,24 +90,27 @@ if st.button("Get Movie Details"):
     try:
         response = requests.get(f"{BACKEND_URL}/movies/{movie_id}", timeout=10)
         response.raise_for_status()
-
         data = response.json()
 
-        # Display movie details in a clean format
         st.subheader("Movie Details")
-        if isinstance(data, dict):
-            title = data.get("title", "Unknown Title")
-            genre = data.get("genre", "N/A")
-            year = data.get("year", "N/A")
 
-            st.write(f"**Title:** {title}")
-            st.write(f"**Genre:** {genre}")
-            st.write(f"**Year:** {year}")
+        # Extract year from title if present
+        title = data.get("title", "N/A")
+        year = "N/A"
+        import re
+        match = re.search(r"\((\d{4})\)", title)
+        if match:
+            year = match.group(1)
 
-            if "description" in data:
-                st.write(f"**Description:** {data['description']}")
-        else:
-            st.warning("Unexpected response format. Check the API response structure.")
+        # Split genres
+        genres = data.get("genres", "")
+        genre_list = genres.split("|") if genres else ["N/A"]
+
+        st.write(f"**Title:** {title}")
+        st.write(f"**Year:** {year}")
+        st.write(f"**Genres:** {', '.join(genre_list)}")
+        st.write(f"**Average Rating:** {data.get('average_rating', 'N/A')}")
+
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
             st.error("Movie not found. Please check the Movie ID.")
@@ -115,4 +118,3 @@ if st.button("Get Movie Details"):
             st.error(f"Server error: {e}")
     except requests.exceptions.RequestException as e:
         st.error(f"Error fetching movie details: {e}")
-

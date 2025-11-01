@@ -13,9 +13,11 @@ fi
 
 echo "Using Python binary at: $PYTHON_BIN"
 
-# Ensure pip is installed and upgraded
+# Ensure pip is installed
 $PYTHON_BIN -m ensurepip --upgrade
-$PYTHON_BIN -m pip install --upgrade pip setuptools wheel
+
+# Downgrade pip to a version that supports --no-use-pep517
+$PYTHON_BIN -m pip install --upgrade "pip<23" setuptools wheel
 
 # Install dependencies
 $PYTHON_BIN -m pip install numpy==1.24.4 pandas==2.0.3

@@ -1,9 +1,10 @@
 # app.py
+import os
 import streamlit as st
 import requests
 
 # 🔹 Replace this with your Render backend URL
-BACKEND_URL = "https://movie-recommendation-project-1-8xns.onrender.com"
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="🎬 Personalized Movie Recommender", layout="centered")
 st.title("🎬 Personalized Movie Recommender")

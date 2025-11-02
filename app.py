@@ -17,7 +17,8 @@ page = st.sidebar.selectbox(
         "Get Movie Details",
         "Get User Details",
         "Rate Movie",
-        "Top Rated Movies"
+        "Top Rated Movies",
+        "Similar Movies"
     ]
 )
 
@@ -25,7 +26,7 @@ page = st.sidebar.selectbox(
 if page == "Home":
     st.subheader("Welcome to the Movie Recommendation System")
     st.write(
-        "Use the sidebar to get recommendations, view movies, look up users, rate movies, or explore the top-rated films."
+        "Use the sidebar to get recommendations, view movies, look up users, rate movies, explore top-rated films, or find similar movies."
     )
 
 # --- GET RECOMMENDATIONS ---
@@ -48,9 +49,7 @@ elif page == "Get Recommendations":
                     for i, movie in enumerate(recs, 1):
                         title = movie.get("title", "Unknown Title")
                         genres = movie.get("genres", "N/A")
-                        year = movie.get("year", "N/A")
-                        avg_rating = movie.get("average_rating", "N/A")
-                        st.write(f"{i}. {title} ({year}) - {genres} | Avg Rating: {avg_rating}")
+                        st.write(f"{i}. {title} - {genres}")
                 else:
                     st.warning("No recommendations found for this user.")
             except requests.exceptions.RequestException as e:
@@ -87,9 +86,7 @@ elif page == "Get Recommendations":
                         for i, movie in enumerate(recs, 1):
                             title = movie.get("title", "Unknown Title")
                             genres = movie.get("genres", "N/A")
-                            year = movie.get("year", "N/A")
-                            avg_rating = movie.get("average_rating", "N/A")
-                            st.write(f"{i}. {title} ({year}) - {genres} | Avg Rating: {avg_rating}")
+                            st.write(f"{i}. {title} - {genres}")
                     else:
                         st.warning("No recommendations found for your ratings.")
             except ValueError:
@@ -130,10 +127,14 @@ elif page == "Get User Details":
 
             if user:
                 st.write(f"**User ID:** {user.get('userId', 'N/A')}")
-                st.write(f"**Age:** {user.get('age', 'N/A')}")
-                st.write(f"**Gender:** {user.get('gender', 'N/A')}")
-                st.write(f"**Occupation:** {user.get('occupation', 'N/A')}")
-                st.write(f"**Zip Code:** {user.get('zip_code', 'N/A')}")
+                st.write(f"**Average Rating:** {user.get('average_rating', 'N/A')}")
+                rated_movies = user.get("rated_movies", [])
+                if rated_movies:
+                    st.write("**Rated Movies:**")
+                    for movie in rated_movies:
+                        st.write(f"{movie.get('title', 'Unknown')} - Rating: {movie.get('rating', 'N/A')}")
+                else:
+                    st.info("This user hasn't rated any movies yet.")
             else:
                 st.warning("No user found with that ID.")
         except requests.exceptions.RequestException as e:
@@ -149,28 +150,12 @@ elif page == "Rate Movie":
 
     if st.button("Submit Rating"):
         try:
-            payload = {
-                "user_id": int(user_id),
-                "ratings": {int(movie_id): float(rating)},
-                "top_n": 5
-            }
-            response = requests.post(f"{BACKEND_URL}/rate/", json=payload, timeout=10)
+            payload = {"userId": int(user_id), "movieId": int(movie_id), "rating": float(rating)}
+            response = requests.post(f"{BACKEND_URL}/rate", json=payload, timeout=10)
             response.raise_for_status()
-
             data = response.json()
-            recs = data if isinstance(data, list) else data.get("recommendations", [])
-
-            st.success(f"Rating submitted successfully for Movie ID {movie_id}.")
-            if recs:
-                st.subheader("New Recommendations:")
-                for i, movie in enumerate(recs, 1):
-                    title = movie.get("title", "Unknown Title")
-                    genres = movie.get("genres", "N/A")
-                    year = movie.get("year", "N/A")
-                    avg_rating = movie.get("average_rating", "N/A")
-                    st.write(f"{i}. {title} ({year}) - {genres} | Avg Rating: {avg_rating}")
-            else:
-                st.info("No new recommendations generated.")
+            st.success("Rating submitted successfully!")
+            st.json(data)
         except requests.exceptions.RequestException as e:
             st.error(f"Error submitting rating: {e}")
 
@@ -190,9 +175,33 @@ elif page == "Top Rated Movies":
                 for i, movie in enumerate(movies, 1):
                     title = movie.get("title", "Unknown Title")
                     genres = movie.get("genres", "N/A")
-                    avg_rating = movie.get("average_rating", "N/A")
+                    avg_rating = movie.get("rating", "N/A")
                     st.write(f"{i}. {title} - {genres} | Avg Rating: {avg_rating}")
             else:
                 st.warning("No top-rated movies available.")
         except requests.exceptions.RequestException as e:
             st.error(f"Error fetching top-rated movies: {e}")
+
+# --- SIMILAR MOVIES ---
+elif page == "Similar Movies":
+    st.subheader("Find Similar Movies")
+
+    movie_id = st.number_input("Enter Movie ID", min_value=1, step=1)
+    n = st.slider("Number of similar movies to show", 1, 10, 5)
+
+    if st.button("Get Similar Movies"):
+        try:
+            response = requests.get(f"{BACKEND_URL}/similar/{movie_id}?n={n}", timeout=10)
+            response.raise_for_status()
+            movies = response.json()
+
+            if isinstance(movies, list) and movies:
+                st.subheader(f"Movies similar to ID {movie_id}:")
+                for i, movie in enumerate(movies, 1):
+                    title = movie.get("title", "Unknown Title")
+                    genres = movie.get("genres", "N/A")
+                    st.write(f"{i}. {title} - {genres}")
+            else:
+                st.warning("No similar movies found.")
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error fetching similar movies: {e}")

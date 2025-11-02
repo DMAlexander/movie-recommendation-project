@@ -2,7 +2,7 @@ import os
 import streamlit as st
 import requests
 
-# 🔹 Replace with your deployed backend URL
+# 🔹 Backend URL (update this environment variable on Render)
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="Movie Recommender", layout="centered")
@@ -11,13 +11,19 @@ st.title("Movie Recommender Web App")
 # --- Sidebar Navigation ---
 page = st.sidebar.selectbox(
     "Select Page",
-    ["Home", "Get Recommendations", "Get Movie Details", "Get User Details"]
+    [
+        "Home",
+        "Get Recommendations",
+        "Get Movie Details",
+        "Get User Details",
+        "Rate Movie"
+    ]
 )
 
 # --- HOME ---
 if page == "Home":
     st.subheader("Welcome to the Movie Recommendation System")
-    st.write("Use the sidebar to get recommendations, view movie details, or look up a user.")
+    st.write("Use the sidebar to get recommendations, view movies, look up users, or rate movies.")
 
 # --- GET RECOMMENDATIONS ---
 elif page == "Get Recommendations":
@@ -32,8 +38,6 @@ elif page == "Get Recommendations":
                 response = requests.get(f"{BACKEND_URL}/recommend/{user_id}?n={top_n}", timeout=10)
                 response.raise_for_status()
                 data = response.json()
-
-                # Handle both list and dict formats
                 recs = data if isinstance(data, list) else data.get("recommendations", [])
 
                 if recs:
@@ -73,7 +77,6 @@ elif page == "Get Recommendations":
                     response = requests.post(f"{BACKEND_URL}/rate/", json=payload, timeout=10)
                     response.raise_for_status()
                     data = response.json()
-
                     recs = data if isinstance(data, list) else data.get("recommendations", [])
 
                     if recs:
@@ -132,3 +135,38 @@ elif page == "Get User Details":
                 st.warning("No user found with that ID.")
         except requests.exceptions.RequestException as e:
             st.error(f"Error fetching user details: {e}")
+
+# --- RATE MOVIE ---
+elif page == "Rate Movie":
+    st.subheader("Rate a Movie")
+
+    user_id = st.number_input("Enter User ID", min_value=1, step=1)
+    movie_id = st.number_input("Enter Movie ID", min_value=1, step=1)
+    rating = st.slider("Rating (1–5)", 1.0, 5.0, 3.0, step=0.5)
+
+    if st.button("Submit Rating"):
+        try:
+            payload = {
+                "user_id": int(user_id),
+                "ratings": {int(movie_id): float(rating)},
+                "top_n": 5
+            }
+            response = requests.post(f"{BACKEND_URL}/rate/", json=payload, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+            recs = data if isinstance(data, list) else data.get("recommendations", [])
+
+            st.success(f"Rating submitted successfully for Movie ID {movie_id}.")
+            if recs:
+                st.subheader("New Recommendations:")
+                for i, movie in enumerate(recs, 1):
+                    title = movie.get("title", "Unknown Title")
+                    genres = movie.get("genres", "N/A")
+                    year = movie.get("year", "N/A")
+                    avg_rating = movie.get("average_rating", "N/A")
+                    st.write(f"{i}. {title} ({year}) - {genres} | Avg Rating: {avg_rating}")
+            else:
+                st.info("No new recommendations generated.")
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error submitting rating: {e}")

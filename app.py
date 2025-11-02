@@ -2,7 +2,7 @@ import os
 import streamlit as st
 import requests
 
-# 🔹 Backend URL (update this environment variable on Render)
+# Backend URL (update via environment variable on Render)
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="Movie Recommender", layout="centered")
@@ -16,14 +16,17 @@ page = st.sidebar.selectbox(
         "Get Recommendations",
         "Get Movie Details",
         "Get User Details",
-        "Rate Movie"
+        "Rate Movie",
+        "Top Rated Movies"
     ]
 )
 
 # --- HOME ---
 if page == "Home":
     st.subheader("Welcome to the Movie Recommendation System")
-    st.write("Use the sidebar to get recommendations, view movies, look up users, or rate movies.")
+    st.write(
+        "Use the sidebar to get recommendations, view movies, look up users, rate movies, or explore the top-rated films."
+    )
 
 # --- GET RECOMMENDATIONS ---
 elif page == "Get Recommendations":
@@ -170,3 +173,26 @@ elif page == "Rate Movie":
                 st.info("No new recommendations generated.")
         except requests.exceptions.RequestException as e:
             st.error(f"Error submitting rating: {e}")
+
+# --- TOP RATED MOVIES ---
+elif page == "Top Rated Movies":
+    st.subheader("Top Rated Movies")
+
+    top_n = st.slider("Number of movies to show", 5, 50, 10)
+
+    if st.button("Show Top Rated Movies"):
+        try:
+            response = requests.get(f"{BACKEND_URL}/top-rated?n={top_n}", timeout=10)
+            response.raise_for_status()
+            movies = response.json()
+
+            if isinstance(movies, list) and movies:
+                for i, movie in enumerate(movies, 1):
+                    title = movie.get("title", "Unknown Title")
+                    genres = movie.get("genres", "N/A")
+                    avg_rating = movie.get("average_rating", "N/A")
+                    st.write(f"{i}. {title} - {genres} | Avg Rating: {avg_rating}")
+            else:
+                st.warning("No top-rated movies available.")
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error fetching top-rated movies: {e}")

@@ -166,7 +166,13 @@ def top_rated(n: int = 10):
     avg_ratings = ratings.groupby("movieId")["rating"].mean().reset_index()
     top_movies = avg_ratings.sort_values("rating", ascending=False).head(n)
     top_movies = pd.merge(top_movies, movies, on="movieId")
-    return top_movies[["movieId", "title", "rating"]].to_dict(orient="records")
+
+    # Safely round ratings and handle missing genres
+    top_movies["rating"] = top_movies["rating"].round(2)
+    if "genres" not in top_movies.columns:
+        top_movies["genres"] = ""
+
+    return top_movies[["movieId", "title", "genres", "rating"]].to_dict(orient="records")
 
 # Similar movies
 @app.get("/similar/{movie_id}")

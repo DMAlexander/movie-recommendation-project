@@ -172,3 +172,7 @@ def top_rated(n: int = 10):
 @app.get("/similar/{movie_id}")
 def similar_movies_endpoint(movie_id: int, n: int = 5):
     return get_similar_movies(movie_id, n)
+
+@app.get("/all-movies")
+def all_movies():
+    return movies[["movieId", "title"]].to_dict(orient="records")

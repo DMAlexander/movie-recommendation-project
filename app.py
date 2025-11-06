@@ -1,72 +1,82 @@
+# app.py
 import os
-import requests
 import streamlit as st
+import requests
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
-BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
+# Backend URL
+BACKEND_URL = os.getenv("BACKEND_URL", "https://movie-recommendation-project-1-8xns.onrender.com")
 
-st.set_page_config(page_title="Movie Recommender System", layout="centered")
+# ---------------------------
+# Streamlit Page Config
+# ---------------------------
+st.set_page_config(page_title="Personalized Movie Recommender", layout="wide")
 
-# ============================================================
-# SIDEBAR NAVIGATION
-# ============================================================
-st.sidebar.title("Navigation")
+# ---------------------------
+# Sidebar Navigation
+# ---------------------------
+st.sidebar.title("Menu")
 page = st.sidebar.radio(
     "Go to",
-    ["Get Recommendations", "Rate Movies", "Movie Details", "Similar Movies", "Top Rated Movies"]
+    ["Home", "Get Recommendations", "Rate Movie", "Top Rated Movies", "Movie Details", "Similar Movies", "User Info"]
 )
 
-# Cache all movie data once for dropdown lists
+# ---------------------------
+# Helper: Load all movies for autocomplete
+# ---------------------------
 @st.cache_data
 def load_movies():
     try:
-        response = requests.get(f"{BACKEND_URL}/movies/all", timeout=15)
+        response = requests.get(f"{BACKEND_URL}/movies/all", timeout=10)
         response.raise_for_status()
-        data = response.json()
-        return {movie["movieId"]: movie["title"] for movie in data}
-    except Exception as e:
+        return response.json()
+    except requests.exceptions.RequestException as e:
         st.error(f"Error loading movie list: {e}")
-        return {}
+        return []
 
-movie_dict = load_movies()
-movie_titles = list(movie_dict.values())
+movies_list = load_movies()
+movie_titles = [movie["title"] for movie in movies_list]
 
-# ============================================================
-# 1️⃣ GET RECOMMENDATIONS
-# ============================================================
-if page == "Get Recommendations":
-    st.title("Get Recommendations")
+# ---------------------------
+# Home Page
+# ---------------------------
+if page == "Home":
+    st.title("Personalized Movie Recommender")
+    st.write("Use the sidebar to navigate between pages.")
 
-    user_type = st.radio("Are you an existing or new user?", ["Existing", "New"])
+# ---------------------------
+# Get Recommendations
+# ---------------------------
+elif page == "Get Recommendations":
+    st.title("Get Movie Recommendations")
+
+    user_type = st.radio("Are you an existing user or new user?", ["Existing", "New"])
+
+    top_n = st.slider("Number of recommendations", 1, 10, 5)
 
     if user_type == "Existing":
         user_id = st.number_input("Enter your User ID", min_value=1, step=1)
-        top_n = st.slider("Number of recommendations", 1, 10, 5)
 
         if st.button("Get Recommendations"):
             try:
-                response = requests.get(f"{BACKEND_URL}/recommend/{user_id}?n={top_n}", timeout=15)
+                response = requests.get(f"{BACKEND_URL}/recommend/{user_id}?n={top_n}", timeout=10)
                 response.raise_for_status()
                 recs = response.json()
                 if recs:
                     st.subheader("Top Recommendations")
                     for i, movie in enumerate(recs, 1):
-                        title = movie.get("title", "Unknown Title")
-                        pred = movie.get("predicted_rating", "N/A")
-                        st.write(f"{i}. {title} (Predicted Rating: {round(pred, 2) if isinstance(pred, float) else pred})")
+                        st.write(f"{i}. {movie['title']} (Predicted Rating: {movie['predicted_rating']:.2f}, Genres: {movie.get('genres','N/A')})")
                 else:
-                    st.info("No recommendations found.")
+                    st.warning("No recommendations found for this user.")
             except requests.exceptions.RequestException as e:
                 st.error(f"Error fetching recommendations: {e}")
 
-    else:
-        st.subheader("New User — Rate Movies to Get Recommendations")
-        st.write("Enter ratings as `movie_id:rating`, separated by commas. Example: `1:5,50:3,100:4`")
+    else:  # New User
+        st.write("Rate a few movies to get personalized recommendations")
+        st.write("Use the movie dropdown or enter IDs manually.")
 
-        ratings_input = st.text_area("Your Ratings")
-        top_n = st.slider("Number of recommendations", 1, 10, 5)
+        ratings_input = st.text_area(
+            "Enter ratings as movie_id:rating, separated by commas (e.g. 1:5,50:3,100:4)"
+        )
 
         if st.button("Get Recommendations"):
             try:
@@ -79,107 +89,124 @@ if page == "Get Recommendations":
                     st.warning("Please enter at least one valid rating.")
                 else:
                     payload = {"user_id": 1000, "ratings": ratings_dict, "top_n": top_n}
-                    response = requests.post(f"{BACKEND_URL}/rate/", json=payload, timeout=15)
+                    response = requests.post(f"{BACKEND_URL}/rate", json=payload, timeout=10)
                     response.raise_for_status()
                     recs = response.json()
                     if recs:
                         st.subheader("Top Recommendations")
                         for i, movie in enumerate(recs, 1):
-                            st.write(f"{i}. {movie}")
+                            st.write(f"{i}. {movie['title']} (Predicted Rating: {movie['predicted_rating']:.2f}, Genres: {movie.get('genres','N/A')})")
                     else:
-                        st.info("No recommendations found.")
-            except Exception as e:
+                        st.warning("No recommendations found for your ratings.")
+            except ValueError:
+                st.error("Invalid input format. Use movie_id:rating, separated by commas.")
+            except requests.exceptions.RequestException as e:
                 st.error(f"Error fetching recommendations: {e}")
 
-# ============================================================
-# 2️⃣ RATE MOVIES
-# ============================================================
-elif page == "Rate Movies":
+# ---------------------------
+# Rate Movie
+# ---------------------------
+elif page == "Rate Movie":
     st.title("Rate a Movie")
 
-    user_id = st.number_input("Enter your User ID", min_value=1, step=1)
-    movie_title = st.selectbox("Select a Movie", movie_titles, index=None, placeholder="Start typing a movie title...")
-    rating = st.slider("Your Rating", 0.5, 5.0, 3.0, 0.5)
+    selected_movie = st.selectbox("Select a movie to rate", movie_titles)
+    rating = st.slider("Your rating", 1, 5, 3)
 
     if st.button("Submit Rating"):
-        try:
-            if not movie_title:
-                st.warning("Please select a movie.")
-            else:
-                movie_id = next((mid for mid, title in movie_dict.items() if title == movie_title), None)
-                if not movie_id:
-                    st.error("Movie not found.")
-                else:
-                    payload = {"user_id": user_id, "movie_id": movie_id, "rating": rating}
-                    response = requests.post(f"{BACKEND_URL}/rate_movie/", json=payload, timeout=15)
-                    response.raise_for_status()
-                    st.success("✅ Rating submitted successfully!")
-        except Exception as e:
-            st.error(f"Error submitting rating: {e}")
+        movie_id = next((m["movieId"] for m in movies_list if m["title"] == selected_movie), None)
+        if movie_id:
+            payload = {"userId": 1000, "movieId": movie_id, "rating": rating}
+            try:
+                response = requests.post(f"{BACKEND_URL}/rate", json=payload, timeout=10)
+                response.raise_for_status()
+                st.success(f"Rating submitted for '{selected_movie}': {rating}")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Error submitting rating: {e}")
+        else:
+            st.warning("Movie not found.")
 
-# ============================================================
-# 3️⃣ MOVIE DETAILS (Lookup by Title)
-# ============================================================
+# ---------------------------
+# Top Rated Movies
+# ---------------------------
+elif page == "Top Rated Movies":
+    st.title("Top Rated Movies")
+    top_n = st.slider("Number of movies to display", 1, 20, 10)
+
+    try:
+        response = requests.get(f"{BACKEND_URL}/top-rated?n={top_n}", timeout=10)
+        response.raise_for_status()
+        top_movies = response.json()
+        for i, movie in enumerate(top_movies, 1):
+            st.write(f"{i}. {movie['title']} (Rating: {movie['rating']:.2f}, Genres: {movie.get('genres','N/A')})")
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error fetching top rated movies: {e}")
+
+# ---------------------------
+# Movie Details
+# ---------------------------
 elif page == "Movie Details":
     st.title("Movie Details")
 
-    movie_title = st.selectbox("Search for a Movie", movie_titles, index=None, placeholder="Start typing a movie title...")
+    selected_movie = st.selectbox("Select a movie", movie_titles)
 
-    if movie_title:
-        movie_id = next((mid for mid, title in movie_dict.items() if title == movie_title), None)
+    if st.button("Get Movie Details"):
+        movie_id = next((m["movieId"] for m in movies_list if m["title"] == selected_movie), None)
         if movie_id:
             try:
-                response = requests.get(f"{BACKEND_URL}/movies/{movie_id}", timeout=15)
+                response = requests.get(f"{BACKEND_URL}/movies/{movie_id}", timeout=10)
                 response.raise_for_status()
                 movie = response.json()
-                st.subheader(movie["title"])
-                st.write(f"**Genres:** {movie.get('genres', 'N/A')}")
-                st.write(f"**Average Rating:** {round(movie.get('average_rating', 0), 2)}")
-            except Exception as e:
+                st.write("Title:", movie["title"])
+                st.write("Genres:", movie.get("genres", "N/A"))
+                st.write("Average Rating:", movie.get("average_rating", "N/A"))
+            except requests.exceptions.RequestException as e:
                 st.error(f"Error fetching movie details: {e}")
+        else:
+            st.warning("Movie not found.")
 
-# ============================================================
-# 4️⃣ SIMILAR MOVIES
-# ============================================================
+# ---------------------------
+# Similar Movies
+# ---------------------------
 elif page == "Similar Movies":
-    st.title("Similar Movies")
+    st.title("Find Similar Movies")
 
-    movie_title = st.selectbox("Select a Movie", movie_titles, index=None, placeholder="Start typing a movie title...")
+    selected_movie = st.selectbox("Select a movie", movie_titles)
+    top_n = st.slider("Number of similar movies", 1, 10, 5)
 
-    if movie_title:
-        movie_id = next((mid for mid, title in movie_dict.items() if title == movie_title), None)
+    if st.button("Find Similar"):
+        movie_id = next((m["movieId"] for m in movies_list if m["title"] == selected_movie), None)
         if movie_id:
             try:
-                response = requests.get(f"{BACKEND_URL}/similar/{movie_id}", timeout=15)
+                response = requests.get(f"{BACKEND_URL}/similar/{movie_id}?n={top_n}", timeout=10)
                 response.raise_for_status()
-                similar_movies = response.json()
-                if similar_movies:
-                    st.subheader(f"Movies similar to '{movie_title}':")
-                    for i, movie in enumerate(similar_movies, 1):
-                        st.write(f"{i}. {movie['title']} (Predicted Rating: {round(movie.get('predicted_rating', 0), 2)})")
+                similar = response.json()
+                if similar:
+                    st.subheader(f"Movies similar to '{selected_movie}'")
+                    for i, movie in enumerate(similar, 1):
+                        st.write(f"{i}. {movie['title']} (Genres: {movie.get('genres','N/A')})")
                 else:
-                    st.info("No similar movies found.")
-            except Exception as e:
+                    st.warning("No similar movies found.")
+            except requests.exceptions.RequestException as e:
                 st.error(f"Error fetching similar movies: {e}")
-
-# ============================================================
-# 5️⃣ TOP RATED MOVIES
-# ============================================================
-elif page == "Top Rated Movies":
-    st.title("Top Rated Movies")
-
-    try:
-        response = requests.get(f"{BACKEND_URL}/top-rated", timeout=15)
-        response.raise_for_status()
-        movies = response.json()
-
-        if movies:
-            for i, movie in enumerate(movies, 1):
-                title = movie.get("title", "Unknown Title")
-                genres = movie.get("genres", "N/A")
-                avg_rating = round(movie.get("average_rating", 0), 2)
-                st.write(f"{i}. **{title}** — Genre: {genres} | Rating: {avg_rating}")
         else:
-            st.info("No top-rated movies found.")
-    except Exception as e:
-        st.error(f"Error fetching top-rated movies: {e}")
+            st.warning("Movie not found.")
+
+# ---------------------------
+# User Info
+# ---------------------------
+elif page == "User Info":
+    st.title("User Information")
+    user_id = st.number_input("Enter User ID", min_value=1, step=1)
+
+    if st.button("Get User Info"):
+        try:
+            response = requests.get(f"{BACKEND_URL}/users/{user_id}", timeout=10)
+            response.raise_for_status()
+            user = response.json()
+            st.write(f"User ID: {user['userId']}")
+            st.write(f"Average Rating: {user['average_rating']:.2f}")
+            st.subheader("Rated Movies")
+            for m in user["rated_movies"]:
+                st.write(f"{m['title']} - Rating: {m['rating']:.2f}")
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error fetching user info: {e}")

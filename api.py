@@ -156,8 +156,15 @@ def get_movie(movie_id: int):
     }
 
 @app.get("/movies/all")
-def get_all_movies():
-    return movies[["movieId", "title", "genres"]].to_dict(orient="records")
+def get_all_movies(limit: int = Query(None, ge=1)):
+    """
+    Returns a list of all movies with their IDs, titles, and genres.
+    Optional query parameter `limit` can restrict the number of movies returned.
+    """
+    df = movies[["movieId", "title", "genres"]].copy()
+    if limit:
+        df = df.head(limit)
+    return df.to_dict(orient="records")
 
 @app.get("/users/{user_id}")
 def get_user(user_id: int):

@@ -162,7 +162,6 @@ elif page == "Rate Movie":
 # --- TOP RATED MOVIES ---
 elif page == "Top Rated Movies":
     st.subheader("Top Rated Movies")
-
     top_n = st.slider("Number of movies to show", 5, 50, 10)
 
     if st.button("Show Top Rated Movies"):
@@ -175,12 +174,18 @@ elif page == "Top Rated Movies":
                 for i, movie in enumerate(movies, 1):
                     title = movie.get("title", "Unknown Title")
                     genres = movie.get("genres", "N/A")
-                    avg_rating = movie.get("rating", "N/A")
-                    st.write(f"{i}. {title} - {genres} | Avg Rating: {avg_rating}")
+                    rating_value = movie.get("average_rating") or movie.get("rating", "N/A")
+
+                    if isinstance(rating_value, (float, int)):
+                        rating_value = f"{rating_value:.2f}"
+
+                    st.write(f"{i}. {title} — {genres} | ⭐ Avg Rating: {rating_value}")
             else:
-                st.warning("No top-rated movies available.")
+                st.warning("No top-rated movies found.")
+
         except requests.exceptions.RequestException as e:
             st.error(f"Error fetching top-rated movies: {e}")
+
 
 # --- SIMILAR MOVIES ---
 elif page == "Similar Movies":

@@ -1,5 +1,5 @@
 # api.py
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from surprise import Dataset, Reader, SVD, accuracy
 from surprise.model_selection import train_test_split

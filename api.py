@@ -1,4 +1,3 @@
-# api.py
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from surprise import Dataset, Reader, SVD, accuracy
@@ -9,266 +8,232 @@ import os
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-app = FastAPI(title="Movie Recommendation API")
+app = FastAPI(title="Robust Movie Recommender API")
 
-# ---------------------------
-# File Paths
-# ---------------------------
+# ============================================================
+# FILE PATHS
+# ============================================================
 MOVIES_PATH = "data/movies.csv"
 RATINGS_PATH = "data/ratings.csv"
 MODEL_PATH = "model/trained_model.pkl"
 
-# ---------------------------
-# Load CSVs
-# ---------------------------
+# ============================================================
+# LOAD MOVIES & RATINGS
+# ============================================================
 if not os.path.exists(MOVIES_PATH) or not os.path.exists(RATINGS_PATH):
-    raise FileNotFoundError("movies.csv or ratings.csv not found in data/ folder")
+    raise FileNotFoundError("Missing movies.csv or ratings.csv in data/ folder")
 
 movies = pd.read_csv(MOVIES_PATH)
 ratings = pd.read_csv(RATINGS_PATH)
 
-# ---------------------------
-# Ensure IDs are integers
-# ---------------------------
+# Convert numeric IDs
 for col in ['movieId', 'userId']:
     if col in movies.columns:
         movies[col] = pd.to_numeric(movies[col], errors='coerce').fillna(0).astype(int)
     if col in ratings.columns:
         ratings[col] = pd.to_numeric(ratings[col], errors='coerce').fillna(0).astype(int)
 
-# ---------------------------
-# Extract year from title
-# ---------------------------
-def extract_year(title: str):
-    if isinstance(title, str) and "(" in title and ")" in title:
-        try:
-            return int(title.strip()[-5:-1])
-        except ValueError:
-            return None
-    return None
+# ============================================================
+# COMBINE GENRE COLUMNS IF NEEDED
+# ============================================================
+genre_columns = [c for c in movies.columns if movies[c].isin([0, 1]).all()]
+if genre_columns:
+    movies['genres'] = movies[genre_columns].apply(
+        lambda row: '|'.join([c for c in genre_columns if row[c] == 1]),
+        axis=1
+    )
+elif 'genres' not in movies.columns:
+    movies['genres'] = 'Unknown'
 
-movies["year"] = movies["title"].apply(extract_year)
-
-# ---------------------------
-# Convert genre columns or fallback
-# ---------------------------
-if "genres" not in movies.columns:
-    genre_columns = [col for col in movies.columns[6:] if movies[col].isin([0, 1]).all()]
-    if genre_columns:
-        movies['genres'] = movies[genre_columns].apply(
-            lambda row: '|'.join([g for g in genre_columns if row[g] == 1]),
-            axis=1
-        )
-    else:
-        movies['genres'] = ""
-
-# ---------------------------
-# Load or train model
-# ---------------------------
+# ============================================================
+# LOAD OR TRAIN MODEL
+# ============================================================
 if os.path.exists(MODEL_PATH):
-    model = joblib.load(MODEL_PATH)
+    try:
+        model = joblib.load(MODEL_PATH)
+    except Exception:
+        model = SVD()
 else:
     reader = Reader(rating_scale=(1, 5))
     data = Dataset.load_from_df(ratings[['userId', 'movieId', 'rating']], reader)
-    trainset, _ = train_test_split(data, test_size=0.2)
+    trainset, _ = train_test_split(data, test_size=0.2, random_state=42)
     model = SVD()
     model.fit(trainset)
     os.makedirs("model", exist_ok=True)
     joblib.dump(model, MODEL_PATH)
 
-# ---------------------------
-# TF-IDF similarity
-# ---------------------------
-if movies['genres'].str.strip().any():
+# ============================================================
+# TF-IDF COSINE SIMILARITY (for similar movies)
+# ============================================================
+if 'genres' in movies.columns and movies['genres'].str.strip().any():
     tfidf = TfidfVectorizer(stop_words='english')
-    tfidf_matrix = tfidf.fit_transform(movies['genres'])
+    tfidf_matrix = tfidf.fit_transform(movies['genres'].fillna(''))
     cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
 else:
     cosine_sim = None
 
-# ---------------------------
-# Helper functions
-# ---------------------------
+# ============================================================
+# Pydantic Models
+# ============================================================
+class RatingInput(BaseModel):
+    user_id: int
+    movie_id: int
+    rating: float
+
+class NewUserInput(BaseModel):
+    user_id: int
+    ratings: dict
+    top_n: int = 5
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
 def get_top_n_recommendations(user_id: int, n: int = 5):
+    """Generate Top-N recommendations for a given user."""
     if user_id not in ratings["userId"].unique():
         raise HTTPException(status_code=404, detail="User ID not found")
 
     rated_movies = ratings.loc[ratings["userId"] == user_id, "movieId"].tolist()
     unrated_movies = movies[~movies["movieId"].isin(rated_movies)]
 
-    predictions = [
-        (movie_id, model.predict(user_id, movie_id).est)
-        for movie_id in unrated_movies["movieId"]
-    ]
-
+    predictions = [(mid, model.predict(user_id, mid).est) for mid in unrated_movies["movieId"]]
     top_n = sorted(predictions, key=lambda x: x[1], reverse=True)[:n]
-    top_movies = movies[movies["movieId"].isin([m for m, _ in top_n])]
 
-    return [
-        {
+    top_movies = movies[movies["movieId"].isin([m for m, _ in top_n])]
+    pred_dict = dict(top_n)
+
+    results = []
+    for _, row in top_movies.iterrows():
+        results.append({
             "movieId": int(row.movieId),
             "title": row.title,
-            "year": int(row.year) if pd.notna(row.year) else None,
-            "genres": row.genres or "N/A",
-            "predicted_rating": round(float(dict(top_n)[row.movieId]), 2)
-        }
-        for _, row in top_movies.iterrows()
-    ]
-
+            "genres": row.get("genres", "Unknown"),
+            "predicted_rating": round(pred_dict.get(row.movieId, 0), 2)
+        })
+    return results
 
 def get_similar_movies(movie_id: int, n: int = 5):
+    """Find movies similar by genre using cosine similarity."""
     if cosine_sim is None:
-        raise HTTPException(status_code=404, detail="Genre similarity data not available")
+        raise HTTPException(status_code=404, detail="No genre similarity data available.")
     if movie_id not in movies["movieId"].values:
-        raise HTTPException(status_code=404, detail="Movie not found")
+        raise HTTPException(status_code=404, detail="Movie not found.")
+
     idx = movies.index[movies["movieId"] == movie_id][0]
     sim_scores = list(enumerate(cosine_sim[idx]))
     sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:n + 1]
     movie_indices = [i[0] for i in sim_scores]
-    similar = movies.iloc[movie_indices][["movieId", "title", "genres", "year"]]
-    return similar.to_dict(orient="records")
+    return movies.iloc[movie_indices][["movieId", "title", "genres"]].to_dict(orient="records")
 
-
-# ---------------------------
-# Models
-# ---------------------------
-class RatingInput(BaseModel):
-    user_id: int
-    movie_id: int
-    rating: float
-
-
-# ---------------------------
+# ============================================================
 # ROUTES
-# ---------------------------
+# ============================================================
 
 @app.get("/")
 def root():
-    return {"message": "Movie Recommendation API is running!"}
+    return {"message": "🎥 Movie Recommender API is online!"}
 
-
+# --- MOVIES ---
 @app.get("/movies/all")
 def get_all_movies():
-    """Return list of all movies for UI dropdowns."""
-    return movies[["movieId", "title", "genres", "year"]].to_dict(orient="records")
-
+    """Return all movies (for dropdown autocomplete)."""
+    return movies[["movieId", "title", "genres"]].to_dict(orient="records")
 
 @app.get("/movies/{movie_id}")
 def get_movie(movie_id: int):
     movie = movies.loc[movies["movieId"] == movie_id]
     if movie.empty:
-        raise HTTPException(status_code=404, detail="Movie not found")
+        raise HTTPException(status_code=404, detail="Movie not found.")
     movie = movie.iloc[0]
     movie_ratings = ratings.loc[ratings["movieId"] == movie_id, "rating"]
-    avg_rating = movie_ratings.mean() if not movie_ratings.empty else None
+    avg_rating = round(movie_ratings.mean(), 2) if not movie_ratings.empty else None
     return {
         "movieId": int(movie.movieId),
         "title": movie.title,
-        "year": int(movie.year) if pd.notna(movie.year) else None,
-        "genres": movie.genres or "N/A",
-        "average_rating": round(avg_rating, 2) if avg_rating is not None else None,
+        "genres": movie.get("genres", "Unknown"),
+        "average_rating": avg_rating
     }
 
-
-@app.get("/movies/title/{title}")
-def get_movie_by_title(title: str):
-    """Lookup movie by title (case-insensitive)."""
-    movie = movies[movies["title"].str.lower() == title.lower()]
-    if movie.empty:
-        raise HTTPException(status_code=404, detail="Movie not found")
-    movie = movie.iloc[0]
-    avg_rating = ratings.loc[ratings["movieId"] == movie.movieId, "rating"].mean()
-    return {
-        "movieId": int(movie.movieId),
-        "title": movie.title,
-        "year": int(movie.year) if pd.notna(movie.year) else None,
-        "genres": movie.genres or "N/A",
-        "average_rating": round(avg_rating, 2) if avg_rating is not None else None,
-    }
-
-
-@app.get("/recommend/{user_id}")
-def recommend_movies(user_id: int, n: int = 5):
-    return get_top_n_recommendations(user_id, n)
-
-
-@app.get("/similar/{movie_id}")
-def similar_movies(movie_id: int, n: int = 5):
-    return get_similar_movies(movie_id, n)
-
-
-@app.post("/rate-movie/")
-def rate_movie(rating_input: RatingInput):
-    """Submit a rating for a single movie."""
-    global ratings
-    new_row = pd.DataFrame([{
-        "userId": rating_input.user_id,
-        "movieId": rating_input.movie_id,
-        "rating": rating_input.rating
-    }])
-    ratings = pd.concat([ratings, new_row], ignore_index=True)
-    return {"message": "Rating submitted successfully!"}
-
-
+# --- USERS ---
 @app.get("/users/{user_id}")
 def get_user(user_id: int):
     user_ratings = ratings[ratings["userId"] == user_id]
     if user_ratings.empty:
-        raise HTTPException(status_code=404, detail="User not found")
-    rated_movies = pd.merge(user_ratings, movies, on="movieId")[
-        ["movieId", "title", "rating"]
-    ].to_dict(orient="records")
-    avg_rating = user_ratings["rating"].mean()
+        raise HTTPException(status_code=404, detail="User not found.")
+    rated_movies = pd.merge(user_ratings, movies, on="movieId")[["movieId", "title", "rating"]]
+    avg_rating = round(user_ratings["rating"].mean(), 2)
     return {
         "userId": user_id,
-        "average_rating": round(avg_rating, 2),
-        "rated_movies": rated_movies,
+        "average_rating": avg_rating,
+        "rated_movies": rated_movies.to_dict(orient="records")
     }
 
+# --- RECOMMENDATIONS ---
+@app.get("/recommend/{user_id}")
+def recommend_movies(user_id: int, n: int = 5):
+    return get_top_n_recommendations(user_id, n)
 
+# --- SIMILAR MOVIES ---
+@app.get("/similar/{movie_id}")
+def similar_movies(movie_id: int, n: int = 5):
+    return get_similar_movies(movie_id, n)
+
+# --- RATE EXISTING MOVIE ---
+@app.post("/rate_movie")
+def rate_movie(rating_input: RatingInput):
+    global ratings
+    ratings = pd.concat(
+        [ratings, pd.DataFrame([{
+            "userId": rating_input.user_id,
+            "movieId": rating_input.movie_id,
+            "rating": rating_input.rating
+        }])],
+        ignore_index=True
+    )
+    return {"message": "Rating submitted successfully."}
+
+# --- RATE & RECOMMEND (for NEW USERS) ---
+@app.post("/rate/")
+def rate_and_recommend(input_data: NewUserInput):
+    global ratings
+    user_id = input_data.user_id
+    for movie_id, rating in input_data.ratings.items():
+        ratings = pd.concat(
+            [ratings, pd.DataFrame([{
+                "userId": user_id,
+                "movieId": int(movie_id),
+                "rating": float(rating)
+            }])],
+            ignore_index=True
+        )
+    return get_top_n_recommendations(user_id, input_data.top_n)
+
+# --- TOP RATED MOVIES ---
 @app.get("/top-rated")
 def top_rated(n: int = 10):
     avg_ratings = ratings.groupby("movieId")["rating"].mean().reset_index()
     top_movies = avg_ratings.sort_values("rating", ascending=False).head(n)
-    top_movies = pd.merge(top_movies, movies, on="movieId")
-    top_movies["rating"] = top_movies["rating"].round(2)
-    top_movies["genres"] = top_movies["genres"].replace("", "N/A")
-    return top_movies[["movieId", "title", "genres", "year", "rating"]].to_dict(orient="records")
+    merged = pd.merge(top_movies, movies, on="movieId", how="left")
+    merged["rating"] = merged["rating"].round(2)
+    merged["genres"] = merged["genres"].fillna("Unknown")
+    return merged[["movieId", "title", "genres", "rating"]].to_dict(orient="records")
 
-
+# --- MODEL INFO ---
 @app.get("/model-info")
 def model_info():
-    """Return model performance metrics."""
+    if ratings.empty:
+        raise HTTPException(status_code=404, detail="No rating data available.")
+
     reader = Reader(rating_scale=(ratings.rating.min(), ratings.rating.max()))
-    data = Dataset.load_from_df(ratings[["userId", "movieId", "rating"]], reader)
+    data = Dataset.load_from_df(ratings[['userId', 'movieId', 'rating']], reader)
     trainset, testset = train_test_split(data, test_size=0.2, random_state=42)
     predictions = model.test(testset)
     rmse = accuracy.rmse(predictions, verbose=False)
     mae = accuracy.mae(predictions, verbose=False)
+
     return {
         "model_type": type(model).__name__,
         "num_ratings": len(ratings),
-        "rmse_on_test": round(rmse, 4),
-        "mae_on_test": round(mae, 4),
-    }
-
-
-@app.post("/retrain")
-def retrain_model():
-    """Retrain SVD model on all ratings."""
-    global model
-    reader = Reader(rating_scale=(ratings.rating.min(), ratings.rating.max()))
-    data = Dataset.load_from_df(ratings[["userId", "movieId", "rating"]], reader)
-    trainset, testset = train_test_split(data, test_size=0.2, random_state=42)
-    model = SVD()
-    model.fit(trainset)
-    predictions = model.test(testset)
-    rmse = accuracy.rmse(predictions, verbose=False)
-    mae = accuracy.mae(predictions, verbose=False)
-    os.makedirs("model", exist_ok=True)
-    joblib.dump(model, MODEL_PATH)
-    return {
-        "message": "Model retrained successfully!",
-        "rmse_on_test": round(rmse, 4),
-        "mae_on_test": round(mae, 4),
+        "rmse": round(rmse, 4),
+        "mae": round(mae, 4)
     }

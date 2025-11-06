@@ -1,5 +1,4 @@
-# api.py
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from surprise import Dataset, Reader, SVD, accuracy
 from surprise.model_selection import train_test_split
@@ -27,18 +26,14 @@ if not os.path.exists(MOVIES_PATH) or not os.path.exists(RATINGS_PATH):
 movies = pd.read_csv(MOVIES_PATH)
 ratings = pd.read_csv(RATINGS_PATH)
 
-# ---------------------------
 # Ensure IDs are integers
-# ---------------------------
 for col in ['movieId', 'userId']:
     if col in movies.columns:
         movies[col] = pd.to_numeric(movies[col], errors='coerce').fillna(0).astype(int)
     if col in ratings.columns:
         ratings[col] = pd.to_numeric(ratings[col], errors='coerce').fillna(0).astype(int)
 
-# ---------------------------
 # Convert one-hot genre columns to 'genres' column
-# ---------------------------
 genre_columns = [col for col in movies.columns[6:] if movies[col].isin([0,1]).all()]
 if genre_columns:
     movies['genres'] = movies[genre_columns].apply(
@@ -48,14 +43,7 @@ if genre_columns:
 else:
     movies['genres'] = ""
 
-# ---------------------------
-# Extract Year from title
-# ---------------------------
-movies['year'] = movies['title'].str.extract(r'\((\d{4})\)').fillna('N/A')
-
-# ---------------------------
 # Load or train model
-# ---------------------------
 if os.path.exists(MODEL_PATH):
     model = joblib.load(MODEL_PATH)
 else:
@@ -67,9 +55,7 @@ else:
     os.makedirs("model", exist_ok=True)
     joblib.dump(model, MODEL_PATH)
 
-# ---------------------------
-# Compute TF-IDF and cosine similarity if genres exist
-# ---------------------------
+# Compute TF-IDF for genres
 if movies['genres'].str.strip().any():
     tfidf = TfidfVectorizer(stop_words='english')
     tfidf_matrix = tfidf.fit_transform(movies['genres'])
@@ -80,27 +66,37 @@ else:
 # ---------------------------
 # Helper functions
 # ---------------------------
-def get_top_n_recommendations(user_id: int, n: int = 5):
-    if user_id not in ratings["userId"].unique():
-        raise HTTPException(status_code=404, detail="User ID not found")
+def get_top_n_recommendations(user_id: int, n: int = 5, new_ratings: dict = None):
+    """
+    Returns top-N movie recommendations.
+    Handles new users with temporary ratings.
+    """
+    temp_ratings = ratings.copy()
+    if new_ratings:
+        for m_id, r in new_ratings.items():
+            temp_ratings = pd.concat([temp_ratings, pd.DataFrame([{
+                "userId": user_id, "movieId": m_id, "rating": r
+            }])], ignore_index=True)
 
-    rated_movies = ratings.loc[ratings["userId"] == user_id, "movieId"].tolist()
+    # Train temporary SVD model
+    reader = Reader(rating_scale=(1, 5))
+    data = Dataset.load_from_df(temp_ratings[['userId', 'movieId', 'rating']], reader)
+    trainset = data.build_full_trainset()
+    temp_model = SVD()
+    temp_model.fit(trainset)
+
+    rated_movies = temp_ratings.loc[temp_ratings["userId"] == user_id, "movieId"].tolist()
     unrated_movies = movies[~movies["movieId"].isin(rated_movies)]
 
-    predictions = [
-        (movie_id, model.predict(user_id, movie_id).est)
-        for movie_id in unrated_movies["movieId"]
-    ]
-
+    predictions = [(mid, temp_model.predict(user_id, mid).est) for mid in unrated_movies["movieId"]]
     top_n = sorted(predictions, key=lambda x: x[1], reverse=True)[:n]
-
     top_movies = movies[movies["movieId"].isin([m for m, _ in top_n])]
 
     return [
         {
             "movieId": int(row.movieId),
             "title": row.title,
-            "genres": row.genres if row.genres else "N/A",
+            "genres": getattr(row, "genres", "N/A"),
             "predicted_rating": round(float(dict(top_n)[row.movieId]), 2)
         }
         for _, row in top_movies.iterrows()
@@ -133,23 +129,37 @@ def root():
     return {"message": "Robust Movie Recommender API is running!"}
 
 @app.get("/recommend/{user_id}")
-def recommend_movies(user_id: int, n: int = 5):
-    return get_top_n_recommendations(user_id, n)
+def recommend_movies(user_id: int, n: int = Query(5, ge=1, le=10), new_ratings: dict = None):
+    if user_id not in ratings["userId"].unique() and not new_ratings:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found. Provide ratings via 'new_ratings' for new users."
+        )
+    recs = get_top_n_recommendations(user_id, n=n, new_ratings=new_ratings)
+    return {"recommendations": recs}
 
 @app.get("/movies/{movie_id}")
-def get_movie(movie_id: int):
-    movie = movies.loc[movies["movieId"] == movie_id]
-    if movie.empty:
-        raise HTTPException(status_code=404, detail="Movie not found")
-    movie = movie.iloc[0]
-    movie_ratings = ratings.loc[ratings["movieId"] == movie_id, "rating"]
+def get_movie(movie_id: int = None, title: str = None):
+    if title:
+        movie = movies[movies['title'].str.contains(title, case=False, regex=False)]
+        if movie.empty:
+            raise HTTPException(status_code=404, detail="Movie not found")
+        movie = movie.iloc[0]
+    elif movie_id is not None:
+        movie = movies[movies["movieId"] == movie_id]
+        if movie.empty:
+            raise HTTPException(status_code=404, detail="Movie not found")
+        movie = movie.iloc[0]
+    else:
+        raise HTTPException(status_code=400, detail="Provide movie_id or title")
+    
+    movie_ratings = ratings.loc[ratings["movieId"] == movie.movieId, "rating"]
     avg_rating = movie_ratings.mean() if not movie_ratings.empty else None
 
     return {
         "movieId": int(movie.movieId),
         "title": movie.title,
-        "genres": movie.genres if movie.genres else "N/A",
-        "year": movie.year,
+        "genres": getattr(movie, 'genres', "N/A"),
         "average_rating": round(avg_rating, 2) if avg_rating is not None else None
     }
 
@@ -158,13 +168,9 @@ def get_user(user_id: int):
     user_ratings = ratings[ratings["userId"] == user_id]
     if user_ratings.empty:
         raise HTTPException(status_code=404, detail="User not found")
-    rated_movies = pd.merge(user_ratings, movies, on="movieId")[["movieId", "title", "genres", "rating"]].to_dict(orient="records")
+    rated_movies = pd.merge(user_ratings, movies, on="movieId")[["movieId", "title", "rating"]].to_dict(orient="records")
     avg_rating = user_ratings["rating"].mean()
-    return {
-        "userId": user_id,
-        "average_rating": round(avg_rating, 2),
-        "rated_movies": rated_movies
-    }
+    return {"userId": user_id, "average_rating": round(avg_rating, 2), "rated_movies": rated_movies}
 
 @app.post("/rate")
 def rate_movie(rating_input: RatingInput):
@@ -181,10 +187,9 @@ def top_rated(n: int = 10):
         {
             "movieId": int(row.movieId),
             "title": row.title,
-            "genres": row.genres if row.genres else "N/A",
-            "rating": round(float(row.rating), 2)
-        }
-        for _, row in top_movies.iterrows()
+            "genres": getattr(row, "genres", "N/A"),
+            "rating": round(row.rating, 2)
+        } for _, row in top_movies.iterrows()
     ]
 
 @app.get("/similar/{movie_id}")

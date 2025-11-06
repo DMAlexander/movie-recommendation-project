@@ -56,7 +56,7 @@ if os.path.exists(MODEL_PATH):
 else:
     reader = Reader(rating_scale=(1, 5))
     data = Dataset.load_from_df(ratings[['userId', 'movieId', 'rating']], reader)
-    trainset, _ = train_test_split(data, test_size=0.2)
+    trainset, _ = train_test_split(data, test_size=0.2, random_state=42)
     model = SVD()
     model.fit(trainset)
     os.makedirs("model", exist_ok=True)
@@ -76,9 +76,6 @@ else:
 # Helper functions
 # ---------------------------
 def get_top_n_recommendations(user_id: int, n: int = 5):
-    if user_id not in ratings["userId"].unique():
-        raise HTTPException(status_code=404, detail="User ID not found")
-
     rated_movies = ratings.loc[ratings["userId"] == user_id, "movieId"].tolist()
     unrated_movies = movies[~movies["movieId"].isin(rated_movies)]
 
@@ -90,23 +87,15 @@ def get_top_n_recommendations(user_id: int, n: int = 5):
     top_n = sorted(predictions, key=lambda x: x[1], reverse=True)[:n]
     top_movies = movies[movies["movieId"].isin([m for m, _ in top_n])]
 
-    result = []
-    for _, row in top_movies.iterrows():
-        movie_id = row.movieId
-        title = row.title
-        genres = getattr(row, 'genres', 'N/A')
-        # Compute average rating for this movie
-        movie_ratings = ratings.loc[ratings["movieId"] == movie_id, "rating"]
-        avg_rating = round(movie_ratings.mean(), 2) if not movie_ratings.empty else None
-        predicted_rating = float(dict(top_n)[movie_id])
-        result.append({
-            "movieId": int(movie_id),
-            "title": title,
-            "genres": genres if genres else "N/A",
-            "average_rating": avg_rating,
-            "predicted_rating": round(predicted_rating, 2)
-        })
-    return result
+    return [
+        {
+            "movieId": int(row.movieId),
+            "title": row.title,
+            "genres": row.genres or "N/A",
+            "predicted_rating": float(dict(top_n)[row.movieId])
+        }
+        for _, row in top_movies.iterrows()
+    ]
 
 def get_similar_movies(movie_id: int, n: int = 5):
     if cosine_sim is None:
@@ -117,26 +106,15 @@ def get_similar_movies(movie_id: int, n: int = 5):
     sim_scores = list(enumerate(cosine_sim[idx]))
     sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:n+1]
     movie_indices = [i[0] for i in sim_scores]
-    result = []
-    for i in movie_indices:
-        row = movies.iloc[i]
-        movie_ratings = ratings.loc[ratings["movieId"] == row.movieId, "rating"]
-        avg_rating = round(movie_ratings.mean(), 2) if not movie_ratings.empty else None
-        result.append({
-            "movieId": int(row.movieId),
-            "title": row.title,
-            "genres": getattr(row, 'genres', 'N/A'),
-            "average_rating": avg_rating
-        })
-    return result
+    return movies.iloc[movie_indices][["movieId", "title", "genres"]].to_dict(orient="records")
 
 # ---------------------------
 # Models
 # ---------------------------
 class RatingInput(BaseModel):
     userId: int
-    movieId: int
-    rating: float
+    ratings: dict
+    top_n: int = 5
 
 # ---------------------------
 # Routes
@@ -154,14 +132,14 @@ def get_movie(movie_id: int):
     movie = movies.loc[movies["movieId"] == movie_id]
     if movie.empty:
         raise HTTPException(status_code=404, detail="Movie not found")
-    row = movie.iloc[0]
-    movie_ratings = ratings.loc[ratings["movieId"] == row.movieId, "rating"]
-    avg_rating = round(movie_ratings.mean(), 2) if not movie_ratings.empty else None
+    movie = movie.iloc[0]
+    movie_ratings = ratings.loc[ratings["movieId"] == movie_id, "rating"]
+    avg_rating = movie_ratings.mean() if not movie_ratings.empty else None
     return {
-        "movieId": int(row.movieId),
-        "title": row.title,
-        "genres": getattr(row, 'genres', 'N/A'),
-        "average_rating": avg_rating
+        "movieId": int(movie.movieId),
+        "title": movie.title,
+        "genres": movie.genres or "N/A",
+        "average_rating": round(avg_rating, 2) if avg_rating is not None else None
     }
 
 @app.get("/users/{user_id}")
@@ -169,48 +147,38 @@ def get_user(user_id: int):
     user_ratings = ratings[ratings["userId"] == user_id]
     if user_ratings.empty:
         raise HTTPException(status_code=404, detail="User not found")
-    rated_movies = pd.merge(user_ratings, movies, on="movieId")
-    result = []
-    for _, row in rated_movies.iterrows():
-        movie_ratings = ratings.loc[ratings["movieId"] == row.movieId, "rating"]
-        avg_rating = round(movie_ratings.mean(), 2) if not movie_ratings.empty else None
-        result.append({
-            "movieId": int(row.movieId),
-            "title": row.title,
-            "genres": getattr(row, 'genres', 'N/A'),
-            "rating": round(row.rating, 2),
-            "average_rating": avg_rating
-        })
-    avg_user_rating = round(user_ratings["rating"].mean(), 2)
-    return {
-        "userId": user_id,
-        "average_rating": avg_user_rating,
-        "rated_movies": result
-    }
+    rated_movies = pd.merge(user_ratings, movies, on="movieId")[["movieId", "title", "rating", "genres"]].to_dict(orient="records")
+    avg_rating = user_ratings["rating"].mean()
+    return {"userId": user_id, "average_rating": round(avg_rating, 2), "rated_movies": rated_movies}
 
 @app.post("/rate")
 def rate_movie(rating_input: RatingInput):
     global ratings, model
-    ratings = pd.concat([ratings, pd.DataFrame([rating_input.dict()])], ignore_index=True)
-    return {"message": "Rating submitted successfully", "data": rating_input.dict()}
+    new_ratings = []
+    for title, r in rating_input.ratings.items():
+        movie_row = movies[movies['title'] == title]
+        if not movie_row.empty:
+            movie_id = int(movie_row.iloc[0].movieId)
+            new_ratings.append({"userId": rating_input.userId, "movieId": movie_id, "rating": float(r)})
+    if not new_ratings:
+        raise HTTPException(status_code=404, detail="No valid movies found to rate")
+    ratings = pd.concat([ratings, pd.DataFrame(new_ratings)], ignore_index=True)
+    return {"recommendations": get_top_n_recommendations(rating_input.userId, rating_input.top_n)}
 
 @app.get("/top-rated")
 def top_rated(n: int = 10):
     avg_ratings = ratings.groupby("movieId")["rating"].mean().reset_index()
     top_movies = avg_ratings.sort_values("rating", ascending=False).head(n)
     top_movies = pd.merge(top_movies, movies, on="movieId")
-    result = []
-    for _, row in top_movies.iterrows():
-        movie_ratings = ratings.loc[ratings["movieId"] == row.movieId, "rating"]
-        avg_rating = round(movie_ratings.mean(), 2) if not movie_ratings.empty else None
-        result.append({
+    return [
+        {
             "movieId": int(row.movieId),
             "title": row.title,
-            "genres": getattr(row, 'genres', 'N/A'),
-            "rating": round(row.rating, 2),
-            "average_rating": avg_rating
-        })
-    return result
+            "genres": row.genres or "N/A",
+            "rating": round(row.rating, 2)
+        }
+        for _, row in top_movies.iterrows()
+    ]
 
 @app.get("/similar/{movie_id}")
 def similar_movies_endpoint(movie_id: int, n: int = 5):
